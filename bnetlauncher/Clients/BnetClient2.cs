@@ -97,12 +97,27 @@ namespace bnetlauncher.Clients
                             var button_color = Color.FromArgb(255, 0, 116, 224);
 
                             var button_location = Point.Empty;
-                            for (int i = 0; i < 10; i++)
+                            int popups_dismissed = 0;
+                            for (int i = 0; i < 20; i++)
                             {
                                 button_location = WinApi.FindColorInProcessMainWindow(proc, button_color);
                                 if (button_location != Point.Empty)
                                 {
                                     break;
+                                }
+
+                                // The client might be showing a popup (like "This folder doesn't contain the
+                                // correct version of this game") that covers the play button. If so click
+                                // its button to dismiss it and keep looking for the play button.
+                                if (popups_dismissed < 3)
+                                {
+                                    var popup_button = WinApi.FindPopupButtonInProcessMainWindow(proc, button_color);
+                                    if (popup_button != Point.Empty)
+                                    {
+                                        Logger.Information("Client popup detected, clicking its button to dismiss it.");
+                                        WinApi.ClickWithinWindow(proc.MainWindowHandle, popup_button);
+                                        popups_dismissed++;
+                                    }
                                 }
                                 Thread.Sleep(500);
                             }
