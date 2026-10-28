@@ -95,6 +95,9 @@ namespace bnetlauncher.Utils
             [DllImport("user32.dll")]
             public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
+            [DllImport("user32.dll")]
+            public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+
             public const int SW_RESTORE = 9;
             public const int SW_SHOWMAXIMIZED = 3;
         }
@@ -311,9 +314,6 @@ namespace bnetlauncher.Utils
             return true;
         }
 
-        [DllImport("user32.dll")]
-        private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
-
         /// <summary>
         /// When the battle.net client shows a popup (for example "This folder doesn't contain the
         /// correct version of this game") the rest of the page gets dimmed, so the play button turns
@@ -322,6 +322,12 @@ namespace bnetlauncher.Utils
         /// </summary>
         public static bool IsPopupShownInProcessMainWindow(Process proc)
         {
+            if (null == proc)
+            {
+                Logger.Error($"{nameof(proc)} is null.");
+                throw new ArgumentNullException(nameof(proc));
+            }
+
             // Play button blue (0,116,224) after the client dims the page.
             var dimmedColor = Color.FromArgb(255, 0, 46, 90);
 
@@ -340,6 +346,12 @@ namespace bnetlauncher.Utils
         /// </summary>
         public static void DismissPopupInProcessMainWindow(Process proc, int attempt)
         {
+            if (null == proc)
+            {
+                Logger.Error($"{nameof(proc)} is null.");
+                throw new ArgumentNullException(nameof(proc));
+            }
+
             switch (attempt % 3)
             {
                 case 0:
@@ -367,13 +379,13 @@ namespace bnetlauncher.Utils
                     }
                 case 1:
                     Logger.Information("Sending Enter key to dismiss popup");
-                    keybd_event(0x0D, 0, 0, UIntPtr.Zero);
-                    keybd_event(0x0D, 0, 0x0002, UIntPtr.Zero);
+                    NativeMethods.keybd_event(0x0D, 0, 0, UIntPtr.Zero);
+                    NativeMethods.keybd_event(0x0D, 0, 0x0002, UIntPtr.Zero);
                     break;
                 default:
                     Logger.Information("Sending Escape key to dismiss popup");
-                    keybd_event(0x1B, 0, 0, UIntPtr.Zero);
-                    keybd_event(0x1B, 0, 0x0002, UIntPtr.Zero);
+                    NativeMethods.keybd_event(0x1B, 0, 0, UIntPtr.Zero);
+                    NativeMethods.keybd_event(0x1B, 0, 0x0002, UIntPtr.Zero);
                     break;
             }
         }
