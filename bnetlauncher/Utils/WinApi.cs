@@ -253,6 +253,100 @@ namespace bnetlauncher.Utils
             return Point.Empty;
         }
 
+        /// <summary>
+        /// Scans an area of the bitmap for pixels of the given color (within tolerance) and returns
+        /// the bounding box and number of matching pixels.
+        /// </summary>
+        private static bool FindColorBounds(Bitmap bmp, Color color, Rectangle area, int tolerance, out Rectangle bounds, out int count)
+        {
+            bounds = Rectangle.Empty;
+            count = 0;
+
+            area.Intersect(new Rectangle(0, 0, bmp.Width, bmp.Height));
+            if (area.Width <= 0 || area.Height <= 0)
+            {
+                return false;
+            }
+
+            int minX = int.MaxValue, maxX = int.MinValue;
+            int minY = int.MaxValue, maxY = int.MinValue;
+
+            var data = bmp.LockBits(area, System.Drawing.Imaging.ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            try
+            {
+                int stride = data.Stride;
+                var buffer = new byte[Math.Abs(stride) * data.Height];
+                Marshal.Copy(data.Scan0, buffer, 0, buffer.Length);
+
+                for (int y = 0; y < data.Height; y++)
+                {
+                    for (int x = 0; x < data.Width; x++)
+                    {
+                        int i = y * stride + x * 4; // BGRA
+                        if (Math.Abs(buffer[i + 2] - color.R) <= tolerance &&
+                            Math.Abs(buffer[i + 1] - color.G) <= tolerance &&
+                            Math.Abs(buffer[i] - color.B) <= tolerance)
+                        {
+                            count++;
+                            int px = x + area.X, py = y + area.Y;
+                            if (px < minX) minX = px;
+                            if (px > maxX) maxX = px;
+                            if (py < minY) minY = py;
+                            if (py > maxY) maxY = py;
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                bmp.UnlockBits(data);
+            }
+
+            if (count == 0)
+            {
+                return false;
+            }
+
+            bounds = new Rectangle(minX, minY, maxX - minX + 1, maxY - minY + 1);
+            return true;
+        }
+
+        /// <summary>
+        /// When the battle.net client shows a popup (for example "This folder doesn't contain the
+        /// correct version of this game") the rest of the page gets dimmed, so the play button turns
+        /// from its normal blue to a much darker one. The popup's own button (OK) is not dimmed and
+        /// has the exact same blue as the play button.
+        ///
+        /// If the dimmed play button is found, this looks for the popup button in the middle of the
+        /// window and returns its center, otherwise returns Point.Empty.
+        /// </summary>
+        public static Point FindPopupButtonInProcessMainWindow(Process proc, Color buttonColor)
+        {
+            // Play button blue (0,116,224) after the client dims the page.
+            var dimmedColor = Color.FromArgb(255, 0, 46, 90);
+
+            using (var bmp = CaptureProcessMainWindow(proc))
+            {
+                // Same area where the play button normally lives.
+                var playArea = new Rectangle(0, Math.Max(0, bmp.Height - 200), Math.Min(400, bmp.Width), Math.Min(200, bmp.Height));
+                if (!FindColorBounds(bmp, dimmedColor, playArea, 3, out _, out int dimmedCount) || dimmedCount < 500)
+                {
+                    return Point.Empty;
+                }
+
+                // Popups show up centered, so only look there.
+                var popupArea = new Rectangle(bmp.Width / 5, bmp.Height / 10, bmp.Width * 3 / 5, bmp.Height * 7 / 10);
+                if (!FindColorBounds(bmp, buttonColor, popupArea, 0, out Rectangle bounds, out int count) || count < 500)
+                {
+                    return Point.Empty;
+                }
+
+                var center = new Point(bounds.X + bounds.Width / 2, bounds.Y + bounds.Height / 2);
+                Logger.Information($"Found popup button at {center.X},{center.Y} (bounds: {bounds.X},{bounds.Y} {bounds.Width}x{bounds.Height})");
+                return center;
+            }
+        }
+
         // Function based of publicly published code
         // reference: https://stackoverflow.com/questions/50380955/c-how-to-get-the-color-of-specific-area-inside-an-image/50387901
         public static Color GetDominantColor(this Bitmap bitmap, Rectangle area)
