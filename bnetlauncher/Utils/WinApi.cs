@@ -311,16 +311,16 @@ namespace bnetlauncher.Utils
             return true;
         }
 
+        [DllImport("user32.dll")]
+        private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+
         /// <summary>
         /// When the battle.net client shows a popup (for example "This folder doesn't contain the
         /// correct version of this game") the rest of the page gets dimmed, so the play button turns
-        /// from its normal blue to a much darker one. The popup's own button (OK) is not dimmed and
-        /// has the exact same blue as the play button.
-        ///
-        /// If the dimmed play button is found, this looks for the popup button in the middle of the
-        /// window and returns its center, otherwise returns Point.Empty.
+        /// from its normal blue to a much darker one. The popup itself doesn't show up in the window
+        /// capture, but the dimmed play button does, so that's used to know a popup is open.
         /// </summary>
-        public static Point FindPopupButtonInProcessMainWindow(Process proc, Color buttonColor)
+        public static bool IsPopupShownInProcessMainWindow(Process proc)
         {
             // Play button blue (0,116,224) after the client dims the page.
             var dimmedColor = Color.FromArgb(255, 0, 46, 90);
@@ -329,21 +329,52 @@ namespace bnetlauncher.Utils
             {
                 // Same area where the play button normally lives.
                 var playArea = new Rectangle(0, Math.Max(0, bmp.Height - 200), Math.Min(400, bmp.Width), Math.Min(200, bmp.Height));
-                if (!FindColorBounds(bmp, dimmedColor, playArea, 3, out _, out int dimmedCount) || dimmedCount < 500)
-                {
-                    return Point.Empty;
-                }
+                return FindColorBounds(bmp, dimmedColor, playArea, 3, out _, out int dimmedCount) && dimmedCount >= 500;
+            }
+        }
 
-                // Popups show up centered, so only look there.
-                var popupArea = new Rectangle(bmp.Width / 5, bmp.Height / 10, bmp.Width * 3 / 5, bmp.Height * 7 / 10);
-                if (!FindColorBounds(bmp, buttonColor, popupArea, 0, out Rectangle bounds, out int count) || count < 500)
-                {
-                    return Point.Empty;
-                }
+        /// <summary>
+        /// Tries to dismiss a popup shown by the client. The popup is always centered in the window
+        /// and can't be seen in the window capture, so the OK button is clicked by its offset from the
+        /// window center. Enter and Escape are used as backups. Each call tries a different method.
+        /// </summary>
+        public static void DismissPopupInProcessMainWindow(Process proc, int attempt)
+        {
+            switch (attempt % 3)
+            {
+                case 0:
+                    {
+                        NativeMethods.RECT wnd;
+                        NativeMethods.GetWindowRect(new HandleRef(proc, proc.MainWindowHandle), out wnd);
+                        // OK button position relative to the window center (measured on a 2560x1440 screen).
+                        var target = new Point((wnd.Left + wnd.Right) / 2 - 219, (wnd.Top + wnd.Bottom) / 2 - 88);
+                        Logger.Information($"Clicking popup OK button at screen position {target.X},{target.Y}");
 
-                var center = new Point(bounds.X + bounds.Width / 2, bounds.Y + bounds.Height / 2);
-                Logger.Information($"Found popup button at {center.X},{center.Y} (bounds: {bounds.X},{bounds.Y} {bounds.Width}x{bounds.Height})");
-                return center;
+                        var oldPos = Cursor.Position;
+                        Cursor.Position = target;
+
+                        var inputMouseDown = new NativeMethods.INPUT();
+                        inputMouseDown.Type = 0;
+                        inputMouseDown.Data.Mouse.Flags = 0x0002;
+                        var inputMouseUp = new NativeMethods.INPUT();
+                        inputMouseUp.Type = 0;
+                        inputMouseUp.Data.Mouse.Flags = 0x0004;
+                        var inputs = new NativeMethods.INPUT[] { inputMouseDown, inputMouseUp };
+                        _ = NativeMethods.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(NativeMethods.INPUT)));
+
+                        Cursor.Position = oldPos;
+                        break;
+                    }
+                case 1:
+                    Logger.Information("Sending Enter key to dismiss popup");
+                    keybd_event(0x0D, 0, 0, UIntPtr.Zero);
+                    keybd_event(0x0D, 0, 0x0002, UIntPtr.Zero);
+                    break;
+                default:
+                    Logger.Information("Sending Escape key to dismiss popup");
+                    keybd_event(0x1B, 0, 0, UIntPtr.Zero);
+                    keybd_event(0x1B, 0, 0x0002, UIntPtr.Zero);
+                    break;
             }
         }
 
