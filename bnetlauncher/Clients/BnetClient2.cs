@@ -97,8 +97,8 @@ namespace bnetlauncher.Clients
                             var button_color = Color.FromArgb(255, 0, 116, 224);
 
                             var button_location = Point.Empty;
-                            int popups_dismissed = 0;
-                            for (int i = 0; i < 20; i++)
+                            int popup_attempts = 0;
+                            for (int i = 0; i < 30; i++)
                             {
                                 button_location = WinApi.FindColorInProcessMainWindow(proc, button_color);
                                 if (button_location != Point.Empty)
@@ -107,17 +107,13 @@ namespace bnetlauncher.Clients
                                 }
 
                                 // The client might be showing a popup (like "This folder doesn't contain the
-                                // correct version of this game") that covers the play button. If so click
-                                // its button to dismiss it and keep looking for the play button.
-                                if (popups_dismissed < 3)
+                                // correct version of this game") that covers the play button. If so try to
+                                // dismiss it and keep looking for the play button.
+                                if (WinApi.IsPopupShownInProcessMainWindow(proc))
                                 {
-                                    var popup_button = WinApi.FindPopupButtonInProcessMainWindow(proc, button_color);
-                                    if (popup_button != Point.Empty)
-                                    {
-                                        Logger.Information("Client popup detected, clicking its button to dismiss it.");
-                                        WinApi.ClickWithinWindow(proc.MainWindowHandle, popup_button);
-                                        popups_dismissed++;
-                                    }
+                                    Logger.Information($"Client popup detected, trying to dismiss it (attempt {popup_attempts + 1}).");
+                                    WinApi.DismissPopupInProcessMainWindow(proc, popup_attempts);
+                                    popup_attempts++;
                                 }
                                 Thread.Sleep(500);
                             }
