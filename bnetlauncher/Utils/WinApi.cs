@@ -315,10 +315,57 @@ namespace bnetlauncher.Utils
         }
 
         /// <summary>
+        /// Counts the pixels that look like a dimmed version of the play button blue (0,116,224).
+        /// When the client shows a popup the page gets darkened by a semi transparent layer, and every
+        /// extra popup stacked on top darkens it more (for example the play button goes from
+        /// 0,116,224 to 0,46,90 and then to 0,32,62). The ratio between green and blue stays the same,
+        /// so that is used instead of looking for one exact color.
+        /// </summary>
+        private static int CountDimmedPlayButtonPixels(Bitmap bmp, Rectangle area)
+        {
+            area.Intersect(new Rectangle(0, 0, bmp.Width, bmp.Height));
+            if (area.Width <= 0 || area.Height <= 0)
+            {
+                return 0;
+            }
+
+            int count = 0;
+            var data = bmp.LockBits(area, System.Drawing.Imaging.ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+            try
+            {
+                int stride = data.Stride;
+                var buffer = new byte[Math.Abs(stride) * data.Height];
+                Marshal.Copy(data.Scan0, buffer, 0, buffer.Length);
+
+                for (int y = 0; y < data.Height; y++)
+                {
+                    for (int x = 0; x < data.Width; x++)
+                    {
+                        int i = y * stride + x * 4; // BGRA
+                        int r = buffer[i + 2], g = buffer[i + 1], b = buffer[i];
+
+                        // Dimmed blue: no red, blue between 40 and 200 (200+ is the normal play button)
+                        // and green at about 52% of blue.
+                        if (r <= 2 && b >= 40 && b <= 200 && Math.Abs(g - (b * 116 / 224)) <= 3)
+                        {
+                            count++;
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                bmp.UnlockBits(data);
+            }
+
+            return count;
+        }
+
+        /// <summary>
         /// When the battle.net client shows a popup (for example "This folder doesn't contain the
-        /// correct version of this game") the rest of the page gets dimmed, so the play button turns
-        /// from its normal blue to a much darker one. The popup itself doesn't show up in the window
-        /// capture, but the dimmed play button does, so that's used to know a popup is open.
+        /// correct version of this game" or the "What's New" window) the rest of the page gets dimmed,
+        /// so the play button turns from its normal blue to a much darker one. Some popups don't show
+        /// up in the window capture, but the dimmed play button does, so that's used to know a popup is open.
         /// </summary>
         public static bool IsPopupShownInProcessMainWindow(Process proc)
         {
@@ -328,21 +375,41 @@ namespace bnetlauncher.Utils
                 throw new ArgumentNullException(nameof(proc));
             }
 
-            // Play button blue (0,116,224) after the client dims the page.
-            var dimmedColor = Color.FromArgb(255, 0, 46, 90);
-
             using (var bmp = CaptureProcessMainWindow(proc))
             {
                 // Same area where the play button normally lives.
                 var playArea = new Rectangle(0, Math.Max(0, bmp.Height - 200), Math.Min(400, bmp.Width), Math.Min(200, bmp.Height));
-                return FindColorBounds(bmp, dimmedColor, playArea, 3, out _, out int dimmedCount) && dimmedCount >= 500;
+                return CountDimmedPlayButtonPixels(bmp, playArea) >= 500;
             }
         }
 
         /// <summary>
-        /// Tries to dismiss a popup shown by the client. The popup is always centered in the window
-        /// and can't be seen in the window capture, so the OK button is clicked by its offset from the
-        /// window center. Enter and Escape are used as backups. Each call tries a different method.
+        /// Moves the mouse to the given screen position, clicks and puts the mouse back.
+        /// </summary>
+        private static void ClickAtScreenPoint(Point target)
+        {
+            var oldPos = Cursor.Position;
+            Cursor.Position = target;
+
+            var inputMouseDown = new NativeMethods.INPUT();
+            inputMouseDown.Type = 0;
+            inputMouseDown.Data.Mouse.Flags = 0x0002;
+            var inputMouseUp = new NativeMethods.INPUT();
+            inputMouseUp.Type = 0;
+            inputMouseUp.Data.Mouse.Flags = 0x0004;
+            var inputs = new NativeMethods.INPUT[] { inputMouseDown, inputMouseUp };
+            _ = NativeMethods.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(NativeMethods.INPUT)));
+
+            Cursor.Position = oldPos;
+        }
+
+        /// <summary>
+        /// Tries to dismiss a popup shown by the client. Each call tries a different method:
+        ///  0 - click the OK button of the "folder doesn't contain the correct version" error, it's always
+        ///      centered in the window and can't be seen in the window capture, so it's found by offset.
+        ///  1 - click on the empty area to the left of the window, which closes the "What's New" window.
+        ///  2 - press Escape, which closes most popups.
+        /// Enter is deliberately not used since the "What's New" window has buttons that would start things.
         /// </summary>
         public static void DismissPopupInProcessMainWindow(Process proc, int attempt)
         {
@@ -352,42 +419,60 @@ namespace bnetlauncher.Utils
                 throw new ArgumentNullException(nameof(proc));
             }
 
+            NativeMethods.RECT wnd;
+            NativeMethods.GetWindowRect(new HandleRef(proc, proc.MainWindowHandle), out wnd);
+
             switch (attempt % 3)
             {
                 case 0:
                     {
-                        NativeMethods.RECT wnd;
-                        NativeMethods.GetWindowRect(new HandleRef(proc, proc.MainWindowHandle), out wnd);
                         // OK button position relative to the window center (measured on a 2560x1440 screen).
                         var target = new Point((wnd.Left + wnd.Right) / 2 - 219, (wnd.Top + wnd.Bottom) / 2 - 88);
                         Logger.Information($"Clicking popup OK button at screen position {target.X},{target.Y}");
-
-                        var oldPos = Cursor.Position;
-                        Cursor.Position = target;
-
-                        var inputMouseDown = new NativeMethods.INPUT();
-                        inputMouseDown.Type = 0;
-                        inputMouseDown.Data.Mouse.Flags = 0x0002;
-                        var inputMouseUp = new NativeMethods.INPUT();
-                        inputMouseUp.Type = 0;
-                        inputMouseUp.Data.Mouse.Flags = 0x0004;
-                        var inputs = new NativeMethods.INPUT[] { inputMouseDown, inputMouseUp };
-                        _ = NativeMethods.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf(typeof(NativeMethods.INPUT)));
-
-                        Cursor.Position = oldPos;
+                        ClickAtScreenPoint(target);
                         break;
                     }
                 case 1:
-                    Logger.Information("Sending Enter key to dismiss popup");
-                    NativeMethods.keybd_event(0x0D, 0, 0, UIntPtr.Zero);
-                    NativeMethods.keybd_event(0x0D, 0, 0x0002, UIntPtr.Zero);
-                    break;
+                    {
+                        // Empty area on the left side of the window, outside of any popup.
+                        int width = wnd.Right - wnd.Left;
+                        int height = wnd.Bottom - wnd.Top;
+                        var target = new Point(wnd.Left + width * 12 / 100, wnd.Top + height * 55 / 100);
+                        Logger.Information($"Clicking outside of popup at screen position {target.X},{target.Y}");
+                        ClickAtScreenPoint(target);
+                        break;
+                    }
                 default:
                     Logger.Information("Sending Escape key to dismiss popup");
                     NativeMethods.keybd_event(0x1B, 0, 0, UIntPtr.Zero);
                     NativeMethods.keybd_event(0x1B, 0, 0x0002, UIntPtr.Zero);
                     break;
             }
+        }
+
+        /// <summary>
+        /// Gets the current size of the process main window, or an empty size if it has no window.
+        /// </summary>
+        public static Size GetProcessMainWindowSize(Process proc)
+        {
+            if (null == proc)
+            {
+                Logger.Error($"{nameof(proc)} is null.");
+                throw new ArgumentNullException(nameof(proc));
+            }
+
+            if (proc.MainWindowHandle == IntPtr.Zero)
+            {
+                return Size.Empty;
+            }
+
+            NativeMethods.RECT wnd;
+            if (!NativeMethods.GetWindowRect(new HandleRef(proc, proc.MainWindowHandle), out wnd))
+            {
+                return Size.Empty;
+            }
+
+            return new Size(wnd.Right - wnd.Left, wnd.Bottom - wnd.Top);
         }
 
         // Function based of publicly published code
