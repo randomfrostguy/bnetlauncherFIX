@@ -110,6 +110,7 @@
     </Compile>
     <Compile Include="Utils\Logger.cs" />
     <Compile Include="Utils\Processes.cs" />
+    <Compile Include="Utils\Splash.cs" />
     <Compile Include="Utils\ProductDb.cs" />
     <Compile Include="Utils\Tasker.cs" />
     <Compile Include="Utils\TrayArea.cs" />

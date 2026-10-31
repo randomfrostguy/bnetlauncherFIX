@@ -42,6 +42,90 @@ namespace bnetlauncher.Clients
             MustBeRunning = false;
         }
 
+        // How long to keep waiting for the play button to show up (a game update can take a while).
+        private const double MaxWaitMinutes = 180;
+
+        // How long without a play button (and without a popup) before the wait notice is shown.
+        private const double NoticeAfterSeconds = 15;
+
+        /// <summary>
+        /// Waits for the given time while keeping any window bnetlauncher shows responsive.
+        /// </summary>
+        private static void PumpWait(int milliseconds)
+        {
+            DateTime end = DateTime.Now.AddMilliseconds(milliseconds);
+            while (DateTime.Now < end)
+            {
+                Application.DoEvents();
+                Thread.Sleep(20);
+            }
+        }
+
+        /// <summary>
+        /// Shows a small always on top window telling the user the game is being updated. It's placed on the
+        /// lower half of the screen so it doesn't get in the way of the popup dismissing clicks.
+        /// </summary>
+        /// <param name="onClosed">Called when the window is closed.</param>
+        private static Form ShowMaintenanceNotice(Action onClosed)
+        {
+            var area = Screen.PrimaryScreen.WorkingArea;
+            var size = new Size(480, 190);
+
+            var form = new Form
+            {
+                Text = "bnetlauncher",
+                FormBorderStyle = FormBorderStyle.FixedDialog,
+                MaximizeBox = false,
+                MinimizeBox = false,
+                TopMost = true,
+                StartPosition = FormStartPosition.Manual,
+                ClientSize = size,
+                Location = new Point(area.Left + (area.Width - size.Width) / 2, area.Top + area.Height * 72 / 100)
+            };
+
+            var title = new Label
+            {
+                Text = "Please wait, Azeroth is receiving maintenance!",
+                Font = new Font("Segoe UI", 13f, FontStyle.Bold),
+                Location = new Point(20, 16),
+                Size = new Size(440, 30)
+            };
+
+            var details = new Label
+            {
+                Text = "bnetlauncher is waiting for the Play button. The game is most likely updating. " +
+                    "This window will close and the game will start on its own once it's ready.",
+                Font = new Font("Segoe UI", 10f),
+                Location = new Point(20, 54),
+                Size = new Size(440, 56)
+            };
+
+            var bar = new ProgressBar
+            {
+                Style = ProgressBarStyle.Marquee,
+                MarqueeAnimationSpeed = 30,
+                Location = new Point(20, 122),
+                Size = new Size(440, 14)
+            };
+
+            var cancel = new Button
+            {
+                Text = "Cancel",
+                Location = new Point(380, 148),
+                Size = new Size(80, 28)
+            };
+            cancel.Click += (sender, e) => form.Close();
+
+            form.Controls.Add(title);
+            form.Controls.Add(details);
+            form.Controls.Add(bar);
+            form.Controls.Add(cancel);
+            form.FormClosed += (sender, e) => onClosed?.Invoke();
+
+            form.Show();
+            return form;
+        }
+
         /// <summary>
         /// When the client is starting fresh it does an automatic login that takes around 10 seconds, any
         /// launch command sent before it finishes is ignored. This waits until the client has been running
@@ -128,6 +212,7 @@ namespace bnetlauncher.Clients
         /// <param name="cmd">Battle.net client ID command to launch.</param>
         public override bool Launch(string cmd)
         {
+            Logger.Information($"Target game product code: '{cmd}'.");
             Logger.Information($"Looking for installPath for '{cmd}'");
             string path = GetProductInstallPath(cmd);
             if (String.IsNullOrEmpty(path))
@@ -178,37 +263,90 @@ namespace bnetlauncher.Clients
                             var button_location = Point.Empty;
                             int popup_attempts = 0;
                             bool popup_seen = false;
+                            bool notice_done = false;
+                            bool notice_cancelled = false;
+                            Form notice = null;
                             DateTime settle_start = DateTime.Now;
-                            for (int i = 0; i < 40; i++)
-                            {
-                                // The client might be showing a popup (like "This folder doesn't contain the
-                                // correct version of this game") that covers the play button. If so try to
-                                // dismiss it and give the client a moment to finish switching to the game's page.
-                                if (WinApi.IsPopupShownInProcessMainWindow(proc))
-                                {
-                                    Logger.Information($"Client popup detected, trying to dismiss it (attempt {popup_attempts + 1}).");
-                                    WinApi.DismissPopupInProcessMainWindow(proc, popup_attempts);
-                                    popup_attempts++;
-                                    popup_seen = true;
-                                    Thread.Sleep(2000);
-                                    continue;
-                                }
+                            IntPtr window_handle = proc.MainWindowHandle;
 
-                                button_location = WinApi.FindColorInProcessMainWindow(proc, button_color);
-                                if (button_location != Point.Empty)
+                            try
+                            {
+                                // Keeps looking for the play button for a long time, since a game that's updating
+                                // doesn't have one until the update is done.
+                                while (!notice_cancelled && DateTime.Now.Subtract(settle_start).TotalMinutes < MaxWaitMinutes)
                                 {
-                                    // The client takes a moment to switch to the requested game's page, clicking
-                                    // play too early would start whatever game was previously selected. So only
-                                    // accept the button once a popup was handled or enough time has passed.
-                                    if (popup_seen || DateTime.Now.Subtract(settle_start).TotalSeconds >= 4)
+                                    // The client replaces its window when the login finishes, so make sure we're not
+                                    // holding on to an old window handle (it would report an empty 0x0 window).
+                                    proc.Refresh();
+                                    if (proc.MainWindowHandle == IntPtr.Zero)
                                     {
-                                        break;
+                                        PumpWait(500);
+                                        continue;
                                     }
 
-                                    Logger.Information("Play button found but client might still be switching games, waiting.");
-                                    button_location = Point.Empty;
+                                    if (proc.MainWindowHandle != window_handle)
+                                    {
+                                        Logger.Information("Client window changed, maximizing the new one.");
+                                        window_handle = proc.MainWindowHandle;
+                                        WinApi.NativeMethods.ShowWindow(window_handle, WinApi.NativeMethods.SW_SHOWMAXIMIZED);
+                                    }
+
+                                    // The client might be showing a popup (like "This folder doesn't contain the
+                                    // correct version of this game" or "What's New") that covers the play button.
+                                    // If so try to dismiss it and give the client a moment to finish switching to
+                                    // the game's page.
+                                    if (WinApi.IsPopupShownInProcessMainWindow(proc))
+                                    {
+                                        Logger.Information($"Client popup detected, trying to dismiss it (attempt {popup_attempts + 1}).");
+                                        WinApi.DismissPopupInProcessMainWindow(proc, popup_attempts);
+                                        popup_attempts++;
+                                        popup_seen = true;
+                                        PumpWait(2000);
+                                        continue;
+                                    }
+
+                                    button_location = WinApi.FindColorInProcessMainWindow(proc, button_color);
+                                    if (button_location != Point.Empty)
+                                    {
+                                        // The client takes a moment to switch to the requested game's page, clicking
+                                        // play too early would start whatever game was previously selected. So only
+                                        // accept the button once a popup was handled or enough time has passed.
+                                        if (popup_seen || DateTime.Now.Subtract(settle_start).TotalSeconds >= 4)
+                                        {
+                                            break;
+                                        }
+
+                                        Logger.Information("Play button found but client might still be switching games, waiting.");
+                                        button_location = Point.Empty;
+                                    }
+                                    else if (notice == null && DateTime.Now.Subtract(settle_start).TotalSeconds >= NoticeAfterSeconds)
+                                    {
+                                        // No play button and no popup, most likely the game is updating.
+                                        Logger.Information("Play button not available, game is probably updating. Showing wait notice.");
+                                        Splash.Hide();
+                                        notice = ShowMaintenanceNotice(() =>
+                                        {
+                                            if (!notice_done)
+                                            {
+                                                Logger.Information("User closed the wait notice.");
+                                                notice_cancelled = true;
+                                            }
+                                        });
+                                    }
+
+                                    PumpWait(500);
                                 }
-                                Thread.Sleep(500);
+                            }
+                            finally
+                            {
+                                // Closes the wait notice (if it was shown), the game is ready or we're giving up.
+                                notice_done = true;
+                                if (notice != null)
+                                {
+                                    notice.Close();
+                                    notice.Dispose();
+                                    Splash.Unhide();
+                                }
                             }
 
                             if (button_location == Point.Empty)

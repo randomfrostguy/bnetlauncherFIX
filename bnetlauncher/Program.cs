@@ -60,6 +60,7 @@ using IniParser.Model;
 using System.Reflection;
 using bnetlauncher.Utils;
 using System.Globalization;
+using System.Text.RegularExpressions;
 
 namespace bnetlauncher
 {
@@ -262,6 +263,7 @@ namespace bnetlauncher
             }
 
             Logger.Information($"Using '{selected_client.Id}' client.");
+            Logger.Information($"Target game: '{selected_game.Name}' (id '{selected_game.Id}', product code '{selected_game.Cmd}', exe '{selected_game.Exe}').");
 
             // Checks if the client is actually Installed installLocation property is not returning an empty path
             if (!selected_client.IsInstalled)
@@ -314,6 +316,9 @@ namespace bnetlauncher
                 }
             }
             #endregion
+
+            // Shows the "Preparing your adventure!" window while the game is being started
+            Splash.Show();
 
             // Make sure the client is running
             if (!selected_client.IsRunning)
@@ -376,6 +381,7 @@ namespace bnetlauncher
                         "For slow starting games the launch option '-t' can also be used to increase the timeout limit.\n\n" +
                         "If you keep getting this message make sure the client is working properly and try rebooting your system.\n";
 
+                    Splash.Hide();
                     var answer = MessageBox.Show(msg, "Game not Found. Retry?",
                         MessageBoxButtons.RetryCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button1);
 
@@ -383,12 +389,14 @@ namespace bnetlauncher
                     {
                         case DialogResult.Retry:
                             Logger.Information("User chose to retry searching for game.");
+                            Splash.Unhide();
                             continue; // back to the begining and try again
 
                         case DialogResult.Cancel:
                             try
                             {
                                 Logger.Information("User chose to cancel.");
+                                Splash.Close();
 
                                 // Make it so we leave the client open
                                 selected_client.WasStarted = false;
@@ -406,6 +414,33 @@ namespace bnetlauncher
                 }
             }
             while (game_process_id == 0); // keep's retrying until user cancels or game found
+
+            // Double check the game that started is really the one that was asked for. The WoW versions share the
+            // same exe name, so if the client was on the wrong page (retail for example) the wrong game would start.
+            // When that happens the wrong game is closed and the launch is tried again.
+            for (int identity_attempt = 1; !IsExpectedGameProcess(game_process_id, selected_client, selected_game); identity_attempt++)
+            {
+                Logger.Warning($"The wrong game was started (attempt {identity_attempt}), closing it.");
+                Processes.KillProcessAndChildsById(game_process_id);
+
+                if (identity_attempt >= 3)
+                {
+                    ShowMessageAndExit($"Battle.net started the wrong game three times in a row instead of {selected_game.Name}.\n\n" +
+                        "Make sure the game is installed and up to date in the Battle.net client and try again.",
+                        "Wrong Game");
+                }
+
+                launch_request_date = DateTime.Now;
+                Logger.Information($"Issuing game launch command '{selected_game.Cmd}' again at '{launch_request_date.ToString("hh:mm:ss.ffff", CultureInfo.InvariantCulture)}'");
+                selected_client.Launch(selected_game.Cmd);
+
+                game_process_id = Processes.GetProcessByNameAfterDate(selected_game.Exe, launch_request_date, param_timeout);
+                if (game_process_id == 0)
+                {
+                    ShowMessageAndExit($"Couldn't find {selected_game.Name} running after trying to start it again.",
+                        "Game not Found");
+                }
+            }
 
             // Copies the game process arguments to launch a second copy of the game under this program and kills
             // the current game process that's under the battle.net client.
@@ -435,6 +470,9 @@ namespace bnetlauncher
                 ShowMessageAndExit("Failed to relaunch game under bnetlauncher/steam.\nOverlay will not work.",
                     "Failed to Launch");
             }
+
+            // The game is starting, the splash stays until the game shows it's own window.
+            Splash.CloseWhenWindowAppears(process, 20);
             #endregion // Launch game
 
             // HACK: Add checks for uplay games that close and relaunch themselfs
@@ -510,6 +548,44 @@ namespace bnetlauncher
         }
 
         /// <summary>
+        /// Checks that the started game process is the game that was asked for. WoW games started with a product code
+        /// receive that code in their "-uid" argument (for example "-uid wowf"), which makes it possible to tell
+        /// them apart even though they share the same exe name.
+        /// Returns true if it matches or if it can't be verified.
+        /// </summary>
+        private static bool IsExpectedGameProcess(int process_id, Client client, Game game)
+        {
+            // Only WoW games started trough the product code can be identified this way.
+            if (client.Id != "battlenet2" || !game.Exe.StartsWith("Wow", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            string arguments;
+            try
+            {
+                arguments = Processes.GetProcessStartInfoById(process_id, 10).Arguments;
+            }
+            catch (Exception ex)
+            {
+                Logger.Warning($"Game identity check skipped, couldn't read game arguments: {ex.Message}");
+                return true;
+            }
+
+            var match = Regex.Match(arguments ?? String.Empty, @"-uid\s+(\S+)", RegexOptions.IgnoreCase);
+            if (!match.Success)
+            {
+                Logger.Information("Game identity check skipped, no -uid found in the game arguments.");
+                return true;
+            }
+
+            var uid = match.Groups[1].Value.Trim('"');
+            var matches = String.Equals(uid, game.Cmd, StringComparison.OrdinalIgnoreCase);
+            Logger.Information($"Game identity check: started game is '{uid}', expected '{game.Cmd}', {(matches ? "match" : "MISMATCH")}.");
+            return matches;
+        }
+
+        /// <summary>
         /// Enumeration for the types of Message ShowMessageAndExit can show.
         /// </summary>
         private enum MessageType { Error, Warning, Info};
@@ -545,6 +621,8 @@ namespace bnetlauncher
                     suffix = "Error: ";
                     break;
             }
+
+            Splash.Close();
 
             try
             {
