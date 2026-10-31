@@ -324,6 +324,7 @@ namespace bnetlauncher.Clients
                                         // No play button and no popup, most likely the game is updating.
                                         Logger.Information("Play button not available, game is probably updating. Showing wait notice.");
                                         Splash.Hide();
+#pragma warning disable CA2000 // The notice is closed and disposed in the finally block below.
                                         notice = ShowMaintenanceNotice(() =>
                                         {
                                             if (!notice_done)
@@ -332,6 +333,7 @@ namespace bnetlauncher.Clients
                                                 notice_cancelled = true;
                                             }
                                         });
+#pragma warning restore CA2000
                                     }
 
                                     PumpWait(500);

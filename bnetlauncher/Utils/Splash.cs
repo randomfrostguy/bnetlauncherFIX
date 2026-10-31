@@ -229,8 +229,12 @@ namespace bnetlauncher.Utils
                 {
                     var bytes = Convert.FromBase64String(SplashImageData.Base64);
 
-                    // The stream has to stay open for as long as the image is used.
-                    return Image.FromStream(new MemoryStream(bytes));
+                    // The image is copied into a bitmap so the stream can be closed right away.
+                    using (var stream = new MemoryStream(bytes))
+                    using (var source = Image.FromStream(stream))
+                    {
+                        return new Bitmap(source);
+                    }
                 }
                 catch (Exception ex)
                 {
