@@ -317,8 +317,8 @@ namespace bnetlauncher
             }
             #endregion
 
-            // Shows the "Preparing your adventure!" window while the game is being started
-            Splash.Show();
+            // Shows the "Preparing Your Adventure!" window (for games that have a picture) while the game is being started
+            Splash.Show(selected_game.Cmd);
 
             // Make sure the client is running
             if (!selected_client.IsRunning)
