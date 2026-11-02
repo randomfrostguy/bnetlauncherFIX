@@ -317,8 +317,9 @@ namespace bnetlauncher
             }
             #endregion
 
-            // Shows the "Preparing Your Adventure!" window (for games that have a picture) while the game is being started
+            // Shows the loading window (for games that have a picture) while the game is being started
             Splash.Show(selected_game.Cmd);
+            Splash.SetProgress(5);
 
             // Make sure the client is running
             if (!selected_client.IsRunning)
@@ -335,6 +336,8 @@ namespace bnetlauncher
             {
                 Logger.Information($"Client already running with pid:'{selected_client.GetProcessId()}'.");
             }
+
+            Splash.SetProgress(15);
 
             #region Launch Game
             // Fire up game trough battle.net using the built in URI handler, we take the date to make sure we
@@ -354,6 +357,7 @@ namespace bnetlauncher
             {
                 Logger.Information($"Issuing game launch command '{selected_game.Cmd}' at '{launch_request_date.ToString("hh:mm:ss.ffff", CultureInfo.InvariantCulture)}'");
                 selected_client.Launch(selected_game.Cmd);
+                Splash.SetProgress(80);
             }
             else
             {
@@ -414,6 +418,7 @@ namespace bnetlauncher
                 }
             }
             while (game_process_id == 0); // keep's retrying until user cancels or game found
+            Splash.SetProgress(88);
 
             // Double check the game that started is really the one that was asked for. The WoW versions share the
             // same exe name, so if the client was on the wrong page (retail for example) the wrong game would start.
@@ -444,6 +449,7 @@ namespace bnetlauncher
                 }
             }
 
+            Splash.SetProgress(93);
             var process = new Process() { StartInfo = Processes.GetProcessStartInfoById(game_process_id) };
 
             // Make sure our StartInfo is actually filled and not blank
@@ -472,6 +478,7 @@ namespace bnetlauncher
             }
 
             // The game is starting, the splash stays until the game shows it's own window.
+            Splash.SetProgress(97);
             Splash.CloseWhenWindowAppears(process, 20);
             #endregion // Launch game
 

@@ -227,6 +227,7 @@ namespace bnetlauncher.Clients
 
             // A freshly started client logs in on it's own first and ignores commands until it's done.
             WaitForClientLogin();
+            Splash.SetProgress(30);
 
             try
             {
@@ -252,6 +253,7 @@ namespace bnetlauncher.Clients
                         if (proc.MainWindowTitle == "Battle.net")
                         {
                             Logger.Information("Found windows for battle.net client.");
+                            Splash.SetProgress(40);
 
                             while (proc.MainWindowHandle == IntPtr.Zero)
                             {
@@ -305,6 +307,7 @@ namespace bnetlauncher.Clients
                                         WinApi.DismissPopupInProcessMainWindow(proc, popup_attempts);
                                         popup_attempts++;
                                         popup_seen = true;
+                                        Splash.SetProgress(50);
                                         PumpWait(2000);
                                         continue;
                                     }
@@ -317,6 +320,7 @@ namespace bnetlauncher.Clients
                                         // accept the button once a popup was handled or enough time has passed.
                                         if (popup_seen || DateTime.Now.Subtract(settle_start).TotalSeconds >= 4)
                                         {
+                                            Splash.SetProgress(65);
                                             break;
                                         }
 
@@ -363,6 +367,7 @@ namespace bnetlauncher.Clients
 
                             Logger.Information("Sending Mouse click at window");
                             WinApi.ClickWithinWindow(proc.MainWindowHandle, button_location);
+                            Splash.SetProgress(75);
                             return true;
                         }
                     }
