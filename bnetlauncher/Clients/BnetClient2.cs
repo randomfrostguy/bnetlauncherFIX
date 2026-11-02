@@ -48,6 +48,10 @@ namespace bnetlauncher.Clients
         // How long without a play button (and without a popup) before the wait notice is shown.
         private const double NoticeAfterSeconds = 15;
 
+        // How many times to try dismissing a popup before giving up on it. Every 3 attempts is one full round of
+        // the different methods, after that something else is going on and random clicking would only do harm.
+        private const int MaxPopupAttempts = 9;
+
         /// <summary>
         /// Waits for the given time while keeping any window bnetlauncher shows responsive.
         /// </summary>
@@ -295,7 +299,7 @@ namespace bnetlauncher.Clients
                                     // correct version of this game" or "What's New") that covers the play button.
                                     // If so try to dismiss it and give the client a moment to finish switching to
                                     // the game's page.
-                                    if (WinApi.IsPopupShownInProcessMainWindow(proc))
+                                    if (popup_attempts < MaxPopupAttempts && WinApi.IsPopupShownInProcessMainWindow(proc))
                                     {
                                         Logger.Information($"Client popup detected, trying to dismiss it (attempt {popup_attempts + 1}).");
                                         WinApi.DismissPopupInProcessMainWindow(proc, popup_attempts);

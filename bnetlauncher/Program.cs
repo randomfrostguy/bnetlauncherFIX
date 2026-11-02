@@ -418,17 +418,19 @@ namespace bnetlauncher
             // Double check the game that started is really the one that was asked for. The WoW versions share the
             // same exe name, so if the client was on the wrong page (retail for example) the wrong game would start.
             // When that happens the wrong game is closed and the launch is tried again.
-            for (int identity_attempt = 1; !IsExpectedGameProcess(game_process_id, selected_client, selected_game); identity_attempt++)
+            int identity_retries = 0;
+            while (!IsExpectedGameProcess(game_process_id, selected_client, selected_game))
             {
-                Logger.Warning($"The wrong game was started (attempt {identity_attempt}), closing it.");
-                Processes.KillProcessAndChildsById(game_process_id);
-
-                if (identity_attempt >= 3)
+                if (identity_retries >= 1)
                 {
-                    ShowMessageAndExit($"Battle.net started the wrong game three times in a row instead of {selected_game.Name}.\n\n" +
-                        "Make sure the game is installed and up to date in the Battle.net client and try again.",
-                        "Wrong Game");
+                    // Closing games over and over is worse than a game that might be the wrong one.
+                    Logger.Warning("The started game still doesn't look like the requested one, leaving it running.");
+                    break;
                 }
+
+                identity_retries++;
+                Logger.Warning("The wrong game was started, closing it and trying once more.");
+                Processes.KillProcessAndChildsById(game_process_id);
 
                 launch_request_date = DateTime.Now;
                 Logger.Information($"Issuing game launch command '{selected_game.Cmd}' again at '{launch_request_date.ToString("hh:mm:ss.ffff", CultureInfo.InvariantCulture)}'");
@@ -442,8 +444,6 @@ namespace bnetlauncher
                 }
             }
 
-            // Copies the game process arguments to launch a second copy of the game under this program and kills
-            // the current game process that's under the battle.net client.
             var process = new Process() { StartInfo = Processes.GetProcessStartInfoById(game_process_id) };
 
             // Make sure our StartInfo is actually filled and not blank
@@ -548,16 +548,39 @@ namespace bnetlauncher
         }
 
         /// <summary>
+        /// The "-uid" a game reports isn't always the same as the product code it's launched with, for example
+        /// Classic Anniversary is launched with 'wow_anniversary' but reports 'wow_classic_anniversary'.
+        /// This lists, for each product code a game is launched with, the uids that game is known to report.
+        /// </summary>
+        private static readonly Dictionary<string, string[]> KnownGameUids = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "wowf", new[] { "wowf", "wow_forever" } },
+            { "wow_anniversary", new[] { "wow_classic_anniversary", "wow_anniversary" } },
+            { "wow_classic_anniversary", new[] { "wow_classic_anniversary", "wow_anniversary" } },
+            { "wow_classic", new[] { "wow_classic" } },
+            { "wow_classic_era", new[] { "wow_classic_era" } },
+            { "wow", new[] { "wow" } }
+        };
+
+        /// <summary>
         /// Checks that the started game process is the game that was asked for. WoW games started with a product code
-        /// receive that code in their "-uid" argument (for example "-uid wowf"), which makes it possible to tell
+        /// receive their uid in a "-uid" argument (for example "-uid wowf"), which makes it possible to tell
         /// them apart even though they share the same exe name.
-        /// Returns true if it matches or if it can't be verified.
+        /// A game only counts as the wrong one when it reports the uid of a different known game (retail when
+        /// Anniversary was asked for, for example). Anything it can't tell for sure is accepted.
         /// </summary>
         private static bool IsExpectedGameProcess(int process_id, Client client, Game game)
         {
             // Only WoW games started trough the product code can be identified this way.
             if (client.Id != "battlenet2" || !game.Exe.StartsWith("Wow", StringComparison.OrdinalIgnoreCase))
             {
+                return true;
+            }
+
+            string[] expected_uids;
+            if (!KnownGameUids.TryGetValue(game.Cmd, out expected_uids))
+            {
+                Logger.Information($"Game identity check skipped, '{game.Cmd}' isn't a game with a known uid.");
                 return true;
             }
 
@@ -572,6 +595,7 @@ namespace bnetlauncher
                 return true;
             }
 
+            Logger.Information($"Game identity check: game arguments are '{arguments}'.");
             var match = Regex.Match(arguments ?? String.Empty, @"-uid\s+(\S+)", RegexOptions.IgnoreCase);
             if (!match.Success)
             {
@@ -580,9 +604,24 @@ namespace bnetlauncher
             }
 
             var uid = match.Groups[1].Value.Trim('"');
-            var matches = String.Equals(uid, game.Cmd, StringComparison.OrdinalIgnoreCase);
-            Logger.Information($"Game identity check: started game is '{uid}', expected '{game.Cmd}', {(matches ? "match" : "MISMATCH")}.");
-            return matches;
+            if (Array.Exists(expected_uids, expected => String.Equals(expected, uid, StringComparison.OrdinalIgnoreCase)))
+            {
+                Logger.Information($"Game identity check: started game is '{uid}', that's the expected game.");
+                return true;
+            }
+
+            // Not the expected game, but only a problem if it's another game we know about.
+            foreach (var other in KnownGameUids)
+            {
+                if (Array.Exists(other.Value, known => String.Equals(known, uid, StringComparison.OrdinalIgnoreCase)))
+                {
+                    Logger.Warning($"Game identity check: started game is '{uid}' but '{game.Cmd}' was requested, that's a different game.");
+                    return false;
+                }
+            }
+
+            Logger.Information($"Game identity check: started game reports unknown uid '{uid}', accepting it.");
+            return true;
         }
 
         /// <summary>

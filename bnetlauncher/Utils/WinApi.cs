@@ -422,6 +422,13 @@ namespace bnetlauncher.Utils
             NativeMethods.RECT wnd;
             NativeMethods.GetWindowRect(new HandleRef(proc, proc.MainWindowHandle), out wnd);
 
+            // A minimized window sits way off screen, clicking relative to it would hit something else.
+            if (wnd.Left <= -20000 || wnd.Top <= -20000)
+            {
+                Logger.Information("Client window is minimized, not sending any clicks or keys.");
+                return;
+            }
+
             switch (attempt % 3)
             {
                 case 0:

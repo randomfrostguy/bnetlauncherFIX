@@ -31,6 +31,9 @@ namespace bnetlauncher.Utils
     {
         private const string Caption = "Preparing Your Adventure!";
 
+        // The window never stays open longer than this, even if something goes wrong.
+        private const int MaxShowSeconds = 150;
+
         private static readonly object sync = new object();
         private static SplashForm form;
         private static Thread thread;
@@ -277,6 +280,16 @@ namespace bnetlauncher.Utils
                     SizeMode = PictureBoxSizeMode.StretchImage,
                     Image = LoadImage(image_data)
                 });
+
+                // Safety net: the window closes itself if nothing else closed it, so it can never stay on screen.
+                var timer = new System.Windows.Forms.Timer { Interval = MaxShowSeconds * 1000 };
+                timer.Tick += (sender, e) =>
+                {
+                    Logger.Warning("Splash window was open for too long, closing it.");
+                    Close();
+                };
+                FormClosed += (sender, e) => timer.Dispose();
+                timer.Start();
             }
 
             // Don't take the focus when shown.
